@@ -42,7 +42,7 @@ RUN --network=none --mount=type=cache,target=/root/.cache/go-build \
     GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
     go build -trimpath \
         -ldflags "-s -w -X ${VERSION_PKG}.Version=${VERSION} -X ${VERSION_PKG}.Revision=${REVISION}" \
-        -o "/out/${BINARY}${ext}" .
+        -o "/out/${BINARY}${ext}" ./cmd/containerd-shim-crawlc-v1
 
 # Unit tests and vet run once on the build platform rather than per target. The
 # code they cover is the platform-independent half, so running it six times would

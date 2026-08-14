@@ -16,7 +16,9 @@
    limitations under the License.
 */
 
-package main
+// Package manager provides the crawlc shim manager, which wraps a real shim
+// manager to inject the crawlc task plugin.
+package manager
 
 import (
 	"context"
@@ -28,6 +30,8 @@ import (
 	apitypes "github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/log"
+
+	"github.com/austinvazquez/crawlc/internal/shim/task"
 )
 
 // crawlcManager owns the delegate's lifecycle and defers everything else to the
@@ -44,21 +48,16 @@ type crawlcManager struct {
 
 var _ shim.Shim = (*crawlcManager)(nil)
 
-func newShimManager(name string) shim.Shim {
+// New returns a shim.Shim that injects delays and optionally proxies to a
+// delegate shim whose runtime is named in the bundle's OCI annotations.
+func New(name string) shim.Shim {
 	return &crawlcManager{name: name, fallback: newFallbackManager(name)}
 }
 
 func (m *crawlcManager) Name() string { return m.name }
 
-// selfPid is the pid of this shim process.
-//
-// It is what containerd is told to supervise, and what a liveness probe should
-// find alive, so both the hollow service and the forwarding one report it rather
-// than any pid belonging to a delegate.
-func selfPid() uint32 { return uint32(os.Getpid()) }
-
 func (m *crawlcManager) Start(ctx context.Context, opts *bootapi.BootstrapParams) (*bootapi.BootstrapResult, error) {
-	runtime, err := delegateRuntimeFromBundle()
+	runtime, err := task.DelegateRuntimeFromBundle()
 	if err != nil {
 		return nil, err
 	}
@@ -74,18 +73,18 @@ func (m *crawlcManager) Start(ctx context.Context, opts *bootapi.BootstrapParams
 	// The delegate goes first. If it fails there is nothing to unwind, whereas
 	// starting crawlc's daemon first and then failing would leave a live shim
 	// that containerd has never been told about.
-	st, err := spawnDelegate(ctx, cwd, runtime, opts)
+	st, err := task.SpawnDelegate(ctx, cwd, runtime, opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := writeDelegateState(cwd, st); err != nil {
-		return nil, errors.Join(err, reapDelegate(ctx, cwd, st))
+	if err := task.WriteDelegateState(cwd, st); err != nil {
+		return nil, errors.Join(err, task.ReapDelegate(ctx, cwd, st))
 	}
 
 	res, err := m.fallback.Start(ctx, opts)
 	if err != nil {
 		// crawlc will never run, so nothing would ever reap the delegate.
-		return nil, errors.Join(err, reapDelegate(ctx, cwd, st), removeDelegateState(cwd))
+		return nil, errors.Join(err, task.ReapDelegate(ctx, cwd, st), task.RemoveDelegateState(cwd))
 	}
 	return res, nil
 }
@@ -97,13 +96,13 @@ func (m *crawlcManager) Stop(ctx context.Context, id string) (shim.StopStatus, e
 	}
 
 	var reapErr error
-	st, err := readDelegateState(cwd)
+	st, err := task.ReadDelegateState(cwd)
 	switch {
 	case err != nil:
 		reapErr = err
 	case st != nil:
-		if reapErr = reapDelegate(ctx, cwd, st); reapErr == nil {
-			reapErr = removeDelegateState(cwd)
+		if reapErr = task.ReapDelegate(ctx, cwd, st); reapErr == nil {
+			reapErr = task.RemoveDelegateState(cwd)
 		} else {
 			// Leave the state file: it is the only record of a delegate that is
 			// still out there, and a later delete can retry from it.

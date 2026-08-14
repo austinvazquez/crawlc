@@ -1,5 +1,3 @@
-//go:build !linux && !windows
-
 /*
    Copyright The crawlc Authors.
 
@@ -16,18 +14,19 @@
    limitations under the License.
 */
 
-package main
+package task
 
 import (
 	"context"
 
 	taskapi "github.com/containerd/containerd/api/runtime/task/v3"
+	runctask "github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/task"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 )
 
-// newLocalService falls back to the hollow service off Linux, where runc's task
-// service does not build and containerd exports no replacement.
-func newLocalService(_ context.Context, _ shim.Publisher, sd shutdown.Service) (taskapi.TTRPCTaskService, error) {
-	return newHollowTaskService(sd), nil
+// newLocalService returns the genuine runc task service, so that on Linux a
+// crawlc container really runs and only its timing is a lie.
+func newLocalService(ctx context.Context, pub shim.Publisher, sd shutdown.Service) (taskapi.TTRPCTaskService, error) {
+	return runctask.NewTaskService(ctx, pub, sd)
 }

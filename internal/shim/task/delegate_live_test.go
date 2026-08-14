@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package main
+package task
 
 import (
 	"context"
@@ -91,9 +91,9 @@ func TestSpawnAndReapDelegate(t *testing.T) {
 		SocketDir:             &sockDir,
 	}
 
-	st, err := spawnDelegate(ctx, bundle, binary, opts)
+	st, err := SpawnDelegate(ctx, bundle, binary, opts)
 	if err != nil {
-		t.Fatalf("spawnDelegate: %v", err)
+		t.Fatalf("SpawnDelegate: %v", err)
 	}
 
 	if st.ID != delegateSocketID(opts.GetInstanceID()) {
@@ -116,10 +116,10 @@ func TestSpawnAndReapDelegate(t *testing.T) {
 		t.Fatalf("expected exactly one delegate socket, got %d", len(socks))
 	}
 
-	if err := writeDelegateState(bundle, st); err != nil {
+	if err := WriteDelegateState(bundle, st); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readDelegateState(bundle)
+	got, err := ReadDelegateState(bundle)
 	if err != nil || got == nil {
 		t.Fatalf("state not readable back: %v", err)
 	}
@@ -143,13 +143,13 @@ func TestSpawnAndReapDelegate(t *testing.T) {
 		t.Logf("delegate answered: taskPid=%d version=%q", res.TaskPid, res.Version)
 	})
 
-	if err := reapDelegate(ctx, bundle, got); err != nil {
-		t.Fatalf("reapDelegate: %v", err)
+	if err := ReapDelegate(ctx, bundle, got); err != nil {
+		t.Fatalf("ReapDelegate: %v", err)
 	}
-	if err := removeDelegateState(bundle); err != nil {
+	if err := RemoveDelegateState(bundle); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := readDelegateState(bundle); st != nil {
+	if st, _ := ReadDelegateState(bundle); st != nil {
 		t.Fatal("delegate state survived the reap")
 	}
 
