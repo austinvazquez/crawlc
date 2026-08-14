@@ -1,0 +1,15 @@
+# Build output, which is also bake's export destination. Leaving it in would feed
+# each build its own previous binaries as context.
+bin/
+
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+docker-bake.hcl
+README.md
+LICENSE
+
+dist/
+.github/
+script/

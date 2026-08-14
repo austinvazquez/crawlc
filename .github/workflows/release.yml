@@ -1,0 +1,115 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Rehearsal path: builds and packages everything, publishes nothing. Worth
+  # having, because the first time a release runs should not be the time a tag
+  # already exists.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp into the rehearsal build
+        required: false
+        default: dev
+
+# Read-only for the workflow; the job widens it to what it actually needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # Only for creating the release. Nothing here pushes commits.
+      contents: write
+      # Sigstore signing for the attestation below. id-token mints the OIDC token
+      # that binds the signature to this workflow and repository.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Inputs are read through the environment rather than interpolated into the
+      # script, so that a branch or tag name cannot inject shell.
+      - name: Resolve version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = 'push' ]; then
+            version="${GITHUB_REF#refs/tags/}"
+          else
+            version="${INPUT_VERSION:-dev}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # A hyphen makes it a prerelease under semver: v0.1.0-rc.1 is one,
+          # v0.1.0 is not.
+          case "$version" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # Before the binaries, so that a release cannot be cut from a tree that
+      # does not pass its own checks. Same bake target a developer runs, so a
+      # green local `make docker-validate` means the same thing here.
+      - name: Validate
+        run: make docker-validate
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REVISION: ${{ github.sha }}
+        run: docker buildx bake
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./script/package.sh
+
+      # Uploaded for every run, including rehearsals, so the artifacts can be
+      # inspected without a release existing.
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: crawlc-${{ steps.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+      # Buildkit's own attestations cover the binaries it produced, not the
+      # archives assembled afterwards, and exported to a directory they are
+      # unsigned files anyone could rewrite. This signs the archives themselves
+      # via Sigstore, so `gh attestation verify <file> --repo <repo>` can prove a
+      # download came from this workflow on this commit.
+      - name: Attest release archives
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+      - name: Publish
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --prerelease="$PRERELEASE" \
+            --verify-tag \
+            dist/*

@@ -1,0 +1,34 @@
+version: "2"
+
+linters:
+  enable:
+    # Unhandled errors are the failure mode this project cares about most: a
+    # missed error from a reap or a shutdown leaks a shim, which is exactly the
+    # bug crawlc is built to reproduce deliberately.
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    # Contexts are threaded through every shim call and losing one turns a
+    # bounded operation into an unbounded one.
+    - noctx
+    - bodyclose
+
+  settings:
+    staticcheck:
+      # containerd's shim.Command is deprecated for callers outside a shim.
+      # crawlc is a shim, so the //nolint:staticcheck at each call site is the
+      # correct exemption rather than a blanket disable.
+      checks: ["all"]
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  # Every finding, not the default sample: the codebase is small enough that a
+  # truncated report is more confusing than a complete one.
+  max-issues-per-linter: 0
+  max-same-issues: 0
