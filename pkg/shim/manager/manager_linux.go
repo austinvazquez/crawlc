@@ -1,5 +1,3 @@
-//go:build !windows
-
 /*
    Copyright The crawlc Authors.
 
@@ -16,19 +14,15 @@
    limitations under the License.
 */
 
-package main
+package manager
 
 import (
-	"context"
-
+	runcmanager "github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/manager"
 	"github.com/containerd/containerd/v2/pkg/shim"
 )
 
-// RuntimeName is the runtime handler crawlc registers as. containerd derives the
-// binary it execs from the last two dot-separated segments, so this name and the
-// containerd-shim-crawlc-v1 binary have to move together.
-const RuntimeName = "io.containerd.crawlc.v1"
-
-func main() {
-	shim.RunShim(context.Background(), newShimManager(RuntimeName))
+// newFallbackManager hands Linux the real runc manager, so that crawlc runs
+// genuine containers there and differs from the stock shim only in timing.
+func newFallbackManager(name string) shim.Shim {
+	return runcmanager.NewShimManager(name)
 }

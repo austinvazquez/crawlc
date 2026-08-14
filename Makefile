@@ -28,15 +28,15 @@ all: build ## Build for the host (default)
 .PHONY: build
 build: bin/$(BINARY) ## Build for the host
 
-bin/$(BINARY): $(wildcard *.go) go.mod go.sum
-	$(GO) build -o $@ .
+bin/$(BINARY): $(shell find cmd internal pkg -name '*.go' 2>/dev/null) go.mod go.sum
+	$(GO) build -o $@ ./cmd/containerd-shim-crawlc-v1
 
 # Catches a change that only compiles on the platform it was written on.
 .PHONY: build-all
 build-all: ## Compile-check every platform
 	@for os in $(PLATFORMS); do \
 		printf '%-9s ' $$os; \
-		GOOS=$$os $(GO) build -o /dev/null . || exit 1; \
+		GOOS=$$os $(GO) build -o /dev/null ./cmd/containerd-shim-crawlc-v1 || exit 1; \
 		echo ok; \
 	done
 

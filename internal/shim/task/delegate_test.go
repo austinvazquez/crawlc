@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package main
+package task
 
 import (
 	"context"
@@ -124,7 +124,7 @@ func TestDelegateStateRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
 	// Absent is not an error: most bundles have no delegate.
-	st, err := readDelegateState(dir)
+	st, err := ReadDelegateState(dir)
 	if err != nil {
 		t.Fatalf("unexpected error for absent state: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestDelegateStateRoundTrip(t *testing.T) {
 		t.Fatalf("expected nil state, got %+v", st)
 	}
 
-	want := &delegateState{
+	want := &DelegateState{
 		Runtime:      "io.containerd.nerdbox.v1",
 		Binary:       "containerd-shim-nerdbox-v1",
 		ID:           delegateSocketID("web"),
@@ -143,11 +143,11 @@ func TestDelegateStateRoundTrip(t *testing.T) {
 		GRPCAddress:  "/run/containerd/containerd.sock",
 		TTRPCAddress: "/run/containerd/containerd.sock.ttrpc",
 	}
-	if err := writeDelegateState(dir, want); err != nil {
+	if err := WriteDelegateState(dir, want); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := readDelegateState(dir)
+	got, err := ReadDelegateState(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,14 +155,14 @@ func TestDelegateStateRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost data:\n got %+v\nwant %+v", got, want)
 	}
 
-	if err := removeDelegateState(dir); err != nil {
+	if err := RemoveDelegateState(dir); err != nil {
 		t.Fatal(err)
 	}
 	// Removing twice must not fail, because a delete can run more than once.
-	if err := removeDelegateState(dir); err != nil {
+	if err := RemoveDelegateState(dir); err != nil {
 		t.Fatalf("second remove should be a no-op: %v", err)
 	}
-	if st, _ := readDelegateState(dir); st != nil {
+	if st, _ := ReadDelegateState(dir); st != nil {
 		t.Fatal("state survived removal")
 	}
 }
@@ -174,7 +174,7 @@ func TestDelegateStateCorrupt(t *testing.T) {
 	}
 	// A corrupt file must be loud. Treating it as "no delegate" would leak the
 	// shim it describes.
-	if _, err := readDelegateState(dir); err == nil {
+	if _, err := ReadDelegateState(dir); err == nil {
 		t.Fatal("expected an error for a corrupt state file")
 	}
 }

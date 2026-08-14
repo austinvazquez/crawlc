@@ -14,7 +14,10 @@
    limitations under the License.
 */
 
-package main
+// Package task implements the crawlc task service: a configurable delay layer
+// in front of a real containerd task service, plus optional delegation to a
+// second shim binary.
+package task
 
 import (
 	"fmt"

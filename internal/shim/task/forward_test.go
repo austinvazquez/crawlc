@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package main
+package task
 
 import (
 	"context"
@@ -148,7 +148,7 @@ func TestForwardShutdownStopsCrawlcEvenIfDelegateFails(t *testing.T) {
 }
 
 func TestNewForwardingTaskServiceRejectsNonTTRPC(t *testing.T) {
-	_, err := newForwardingTaskService(&delegateState{
+	_, err := newForwardingTaskService(&DelegateState{
 		Runtime:  "io.containerd.example.v1",
 		Protocol: "grpc",
 		Address:  "vsock://3:1024",
@@ -177,7 +177,7 @@ func TestTaskServiceForUsesDelegateWhenConfigured(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
 	const runtime = "io.containerd.example.v1"
-	if err := writeDelegateState(dir, &delegateState{
+	if err := WriteDelegateState(dir, &DelegateState{
 		Runtime:  runtime,
 		Protocol: "ttrpc",
 		Address:  "unix://" + filepath.Join(dir, "absent.sock"),

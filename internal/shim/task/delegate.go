@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package main
+package task
 
 import (
 	"context"
@@ -61,8 +61,8 @@ const (
 	delegateStateFile = "crawlc-delegate.json"
 )
 
-// delegateState is what crawlc needs to reach and later reap its delegate.
-type delegateState struct {
+// DelegateState is what crawlc needs to reach and later reap its delegate.
+type DelegateState struct {
 	Runtime string `json:"runtime"`
 	Binary  string `json:"binary"`
 	// ID is the delegate's socket identity, deliberately not the container's.
@@ -101,8 +101,8 @@ func resolveDelegateBinary(runtime string) (string, error) {
 	return binary, nil
 }
 
-// delegateRuntimeFromBundle returns the configured delegate, or "" for none.
-func delegateRuntimeFromBundle() (string, error) {
+// DelegateRuntimeFromBundle returns the configured delegate runtime, or "" for none.
+func DelegateRuntimeFromBundle() (string, error) {
 	a, err := bundleAnnotations()
 	if err != nil {
 		return "", err
@@ -114,9 +114,9 @@ func delegateStatePath(bundlePath string) string {
 	return filepath.Join(bundlePath, delegateStateFile)
 }
 
-// readDelegateState returns nil without error when no delegate was configured,
+// ReadDelegateState returns nil without error when no delegate was configured,
 // which is the common case and not a failure.
-func readDelegateState(bundlePath string) (*delegateState, error) {
+func ReadDelegateState(bundlePath string) (*DelegateState, error) {
 	b, err := os.ReadFile(delegateStatePath(bundlePath))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -124,14 +124,15 @@ func readDelegateState(bundlePath string) (*delegateState, error) {
 		}
 		return nil, err
 	}
-	var st delegateState
+	var st DelegateState
 	if err := json.Unmarshal(b, &st); err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", delegateStateFile, err)
 	}
 	return &st, nil
 }
 
-func writeDelegateState(bundlePath string, st *delegateState) error {
+// WriteDelegateState persists delegate state inside the bundle.
+func WriteDelegateState(bundlePath string, st *DelegateState) error {
 	b, err := json.Marshal(st)
 	if err != nil {
 		return err
@@ -139,7 +140,9 @@ func writeDelegateState(bundlePath string, st *delegateState) error {
 	return os.WriteFile(delegateStatePath(bundlePath), b, 0o600)
 }
 
-func removeDelegateState(bundlePath string) error {
+// RemoveDelegateState removes the delegate state file from the bundle.
+// Removing a file that does not exist is not an error.
+func RemoveDelegateState(bundlePath string) error {
 	err := os.Remove(delegateStatePath(bundlePath))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -172,11 +175,11 @@ func delegateLogLevel(l bootapi.LogLevel) log.Level {
 	}
 }
 
-// spawnDelegate runs the delegate shim's "start" action and records where it
+// SpawnDelegate runs the delegate shim's "start" action and records where it
 // ended up. This is the same handshake containerd performs against crawlc, one
 // level down: exec the binary, read a BootstrapResult off stdout, keep the
 // address.
-func spawnDelegate(ctx context.Context, bundlePath, runtime string, opts *bootapi.BootstrapParams) (*delegateState, error) {
+func SpawnDelegate(ctx context.Context, bundlePath, runtime string, opts *bootapi.BootstrapParams) (*DelegateState, error) {
 	binary, err := resolveDelegateBinary(runtime)
 	if err != nil {
 		return nil, err
@@ -211,7 +214,7 @@ func spawnDelegate(ctx context.Context, bundlePath, runtime string, opts *bootap
 		return nil, fmt.Errorf("delegate %q returned no address", runtime)
 	}
 
-	return &delegateState{
+	return &DelegateState{
 		Runtime:      runtime,
 		Binary:       binary,
 		ID:           id,
@@ -228,7 +231,7 @@ func spawnDelegate(ctx context.Context, bundlePath, runtime string, opts *bootap
 // design: a delegate that has already died fails the dial, which is success as
 // far as reaping is concerned. Errors are not returned because the delete action
 // that follows is what determines whether the reap worked.
-func shutdownDelegate(ctx context.Context, st *delegateState) {
+func shutdownDelegate(ctx context.Context, st *DelegateState) {
 	conn, err := shim.Connect(st.Address, shim.AnonReconnectDialer)
 	if err != nil {
 		return
@@ -242,13 +245,13 @@ func shutdownDelegate(ctx context.Context, st *delegateState) {
 	})
 }
 
-// reapDelegate stops the delegate and runs its "delete" action.
+// ReapDelegate stops the delegate and runs its "delete" action.
 //
 // Without this every crawlc container leaves a second shim behind. That matters
 // more here than in an ordinary shim: crawlc exists to leak the *first* shim on
 // purpose, so an accidentally leaked second one is indistinguishable from the
 // condition under test.
-func reapDelegate(ctx context.Context, bundlePath string, st *delegateState) error {
+func ReapDelegate(ctx context.Context, bundlePath string, st *DelegateState) error {
 	// The delete action tears down task state but leaves a running daemon alone,
 	// so a live delegate has to be told to exit over the task API first. Skipping
 	// this leaks the delegate process while reporting success, which is the exact

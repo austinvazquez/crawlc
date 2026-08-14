@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package main
+package task
 
 import (
 	"context"
@@ -30,6 +30,13 @@ import (
 	"github.com/containerd/ttrpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+// selfPid is the pid of this shim process.
+//
+// It is what containerd is told to supervise, and what a liveness probe should
+// find alive, so both the hollow service and the forwarding one report it rather
+// than any pid belonging to a delegate.
+func selfPid() uint32 { return uint32(os.Getpid()) }
 
 // forwardingTaskService passes every task call to a delegate shim.
 //
@@ -51,7 +58,7 @@ var _ taskapi.TTRPCTaskService = (*forwardingTaskService)(nil)
 const taskAPIVersion = 3
 
 // newForwardingTaskService dials a delegate that has already been started.
-func newForwardingTaskService(st *delegateState, sd shutdown.Service) (*forwardingTaskService, error) {
+func newForwardingTaskService(st *DelegateState, sd shutdown.Service) (*forwardingTaskService, error) {
 	// crawlc only speaks the ttrpc dialect of the task API. A grpc delegate would
 	// need a different client, and silently mis-dialing one would surface much
 	// later as an unreadable response.
@@ -123,7 +130,7 @@ func taskServiceFor(ctx context.Context, pub shim.Publisher, sd shutdown.Service
 		return nil, err
 	}
 
-	st, err := readDelegateState(cwd)
+	st, err := ReadDelegateState(cwd)
 	if err != nil {
 		return nil, err
 	}
