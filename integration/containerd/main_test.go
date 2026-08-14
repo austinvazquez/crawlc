@@ -1,4 +1,4 @@
-//go:build linux
+//go:build !windows
 
 /*
    Copyright The crawlc Authors.
@@ -48,7 +48,7 @@ const (
 	// EnvRunc is the OCI runtime crawlc's task service drives on Linux. It is
 	// needed by name rather than only through containerd, because cleaning up
 	// after a shim that was killed rather than asked means deleting runc's state
-	// directly. Defaults to PATH.
+	// directly. Defaults to PATH. Linux-only; ignored on other platforms.
 	EnvRunc = "CRAWLC_TEST_RUNC"
 
 	// EnvImage is the image containers are created from. It needs a shell and a
@@ -116,7 +116,7 @@ func enabled() bool { return os.Getenv(EnvEnable) != "" }
 
 func setup() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("must run as root: containerd, runc and the shim all need it")
+		return fmt.Errorf("must run as root: containerd and the shim both need it")
 	}
 
 	var err error
@@ -126,15 +126,20 @@ func setup() error {
 	if ctrBin, err = lookBinary(EnvCtr, "ctr"); err != nil {
 		return err
 	}
-	if runcBin, err = lookBinary(EnvRunc, "runc"); err != nil {
-		return err
+	if runtime.GOOS == "linux" {
+		// runc is needed on Linux to clean up container state after a shim is
+		// killed. On other platforms the hollow task service runs no containers,
+		// so there is no runc state to clean up.
+		if runcBin, err = lookBinary(EnvRunc, "runc"); err != nil {
+			return err
+		}
 	}
 	if shimBin, err = lookShim(); err != nil {
 		return err
 	}
 
 	testImage = os.Getenv(EnvImage)
-	if testImage == "" {
+	if testImage == "" && runtime.GOOS == "linux" {
 		testImage = defaultImage
 	}
 	snapshotter = os.Getenv(EnvSnapshotter)
@@ -186,7 +191,7 @@ func lookShim() (string, error) {
 	var candidates []string
 	for _, rel := range []string{
 		filepath.Join("..", "bin", shimBinaryName),
-		filepath.Join("..", "bin", "linux_"+runtime.GOARCH, shimBinaryName),
+		filepath.Join("..", "bin", runtime.GOOS+"_"+runtime.GOARCH, shimBinaryName),
 	} {
 		if abs, err := filepath.Abs(rel); err == nil {
 			candidates = append(candidates, abs)

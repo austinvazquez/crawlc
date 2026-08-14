@@ -19,11 +19,11 @@
 // The tests here are the other half of crawlc's unit tests: those check that the
 // annotations parse and that a delegate is spawned and reaped, this checks what
 // containerd does when the shim in front of it stops answering. That needs a
-// containerd daemon, a container runtime and root, so the whole suite is opt-in
-// and skips unless CRAWLC_TEST_INTEGRATION is set. See the README.
+// containerd daemon and root, so the whole suite is opt-in and skips unless
+// CRAWLC_TEST_INTEGRATION is set. See the README.
 //
-// This file carries no build constraint on purpose: the tests are Linux-only, and
-// without an unconstrained file the package would have no files at all elsewhere,
-// which `go vet ./...` reports as an error on every other platform crawlc builds
-// for.
+// On Linux the tests run full containers via runc. On macOS and other non-Linux
+// platforms the hollow task service is used instead: crawlc responds to every
+// task API call without launching an OCI runtime, which is enough to drive
+// containerd's shim lifecycle without needing a container-capable host.
 package containerd

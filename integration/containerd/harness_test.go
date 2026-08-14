@@ -1,4 +1,4 @@
-//go:build linux
+//go:build !windows
 
 /*
    Copyright The crawlc Authors.
@@ -33,8 +33,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // The shim timeouts every test daemon is configured with. They are written into
@@ -65,16 +63,6 @@ const armFileName = "crawlc.arm"
 // bundlesDir is where the v2 runtime keeps bundles under the state directory.
 const bundlesDir = "io.containerd.runtime.v2.task"
 
-// runcRoot mirrors process.RuncRoot in containerd's runc shim, which is where
-// runc's own container state lives, namespaced by containerd namespace.
-//
-// It is not under the test's state directory and cannot be moved there: `ctr`
-// only passes runtime options for the runc runtime itself, so a container on
-// crawlc always gets the default. That makes it the one piece of global state
-// these tests touch, and the reason cleanup deletes runc containers by name
-// instead of relying on the temp directory going away.
-const runcRoot = "/run/containerd/runc"
-
 // daemon is a containerd started for a single test, with its own root, state and
 // socket, so that tests neither see each other's shims nor touch a containerd
 // already running on the machine.
@@ -86,6 +74,11 @@ type daemon struct {
 	address string
 	config  string
 	logPath string
+
+	// rootfsDir is the directory passed to --rootfs on platforms where there is
+	// no image to pull. The hollow task service ignores rootfs contents, so an
+	// empty directory is enough to satisfy containerd's bundle setup.
+	rootfsDir string
 
 	// Set while running.
 	cmd       *exec.Cmd
@@ -327,20 +320,34 @@ func (d *daemon) mustCtr(budget time.Duration, args ...string) string {
 	return out
 }
 
-// pull fetches the test image into this daemon's content store.
+// pull fetches the test image into this daemon's content store on Linux.
+//
+// On other platforms there is no image registry reachable and no OCI runtime to
+// run containers in anyway. Instead, an empty directory is created and stored in
+// d.rootfsDir; run() passes it to --rootfs, bypassing the image and snapshot
+// machinery entirely. The hollow task service never inspects rootfs contents, so
+// an empty directory is enough to exercise the shim lifecycle.
 func (d *daemon) pull() {
 	d.t.Helper()
 
-	args := []string{"images", "pull", "--platform", "linux/" + runtime.GOARCH}
-	if snapshotter != "" {
-		// The transfer service refuses to unpack for a non-default snapshotter
-		// ("no unpack platforms defined"), so a run with an overridden
-		// snapshotter takes the client-side pull path instead.
-		args = append(args, "--snapshotter", snapshotter, "--local")
+	if runtime.GOOS == "linux" {
+		args := []string{"images", "pull", "--platform", "linux/" + runtime.GOARCH}
+		if snapshotter != "" {
+			// The transfer service refuses to unpack for a non-default snapshotter
+			// ("no unpack platforms defined"), so a run with an overridden
+			// snapshotter takes the client-side pull path instead.
+			args = append(args, "--snapshotter", snapshotter, "--local")
+		}
+		args = append(args, testImage)
+		d.mustCtr(5*time.Minute, args...)
+		return
 	}
-	args = append(args, testImage)
 
-	d.mustCtr(5*time.Minute, args...)
+	rootfs := filepath.Join(d.root, "hollow-rootfs")
+	if err := os.MkdirAll(rootfs, 0o755); err != nil {
+		d.t.Fatalf("failed to create hollow rootfs: %v", err)
+	}
+	d.rootfsDir = rootfs
 }
 
 // run creates and starts a container on crawlc. The annotation keys are relative
@@ -361,34 +368,23 @@ func (d *daemon) run(id string, annotations map[string]string, args ...string) {
 	for _, k := range keys {
 		argv = append(argv, "--annotation", annotationPrefix+k+"="+annotations[k])
 	}
-	argv = append(argv, testImage, id)
-	argv = append(argv, args...)
 
-	// A run that was killed outright — `go test -timeout`, a cancelled CI job —
-	// never reaches its cleanup, and runc's state is the one part of it that
-	// outlives the temp directory. Clearing it here is what makes the suite
-	// rerunnable after that, instead of failing with "container with given ID
-	// already exists" until someone cleans up by hand.
-	d.removeRuncState(id)
+	if runtime.GOOS == "linux" {
+		// A run that was killed outright — `go test -timeout`, a cancelled CI
+		// job — never reaches its cleanup, and runc's state is the one part of
+		// it that outlives the temp directory. Clearing it here is what makes
+		// the suite rerunnable after that.
+		d.removeRuncState(id)
+		argv = append(argv, testImage, id)
+	} else {
+		// On non-Linux, bypass the image and snapshot path entirely: pass the
+		// empty hollow rootfs directory that pull() created.
+		argv = append(argv, "--rootfs", d.rootfsDir, id)
+	}
+	argv = append(argv, args...)
 
 	d.ids = append(d.ids, id)
 	d.mustCtr(2*time.Minute, argv...)
-}
-
-// removeRuncState deletes a container from runc's state, killing whatever is
-// still running in it. Best effort: a container that was never created is the
-// normal case.
-func (d *daemon) removeRuncState(id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, runcBin,
-		"--root", filepath.Join(runcRoot, testNamespace),
-		"delete", "--force", id,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(out), "does not exist") {
-		d.t.Logf("runc delete %s: %v: %s", id, err, out)
-	}
 }
 
 // bundle is the on-disk bundle for a container, which is also the shim's working
@@ -448,45 +444,6 @@ func (d *daemon) waitTaskStatus(id, want string, budget time.Duration) {
 	d.t.Fatalf("task %s was %q, not %q, after %s", id, last, want, budget)
 }
 
-// shimPids lists the crawlc shims started by this daemon.
-//
-// The daemon's own address is the discriminator: containerd passes it to every
-// shim it spawns, so this never picks up a shim belonging to another test or to
-// a containerd already running on the machine.
-func (d *daemon) shimPids() []int {
-	d.t.Helper()
-
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		d.t.Fatalf("failed to read /proc: %v", err)
-	}
-
-	var pids []int
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
-		if err != nil {
-			// The process exited between the listing and the read.
-			continue
-		}
-		argv := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
-		if len(argv) == 0 || filepath.Base(argv[0]) != shimBinaryName {
-			continue
-		}
-		for i := 0; i+1 < len(argv); i++ {
-			if argv[i] == "-address" && argv[i+1] == d.address {
-				pids = append(pids, pid)
-				break
-			}
-		}
-	}
-	sort.Ints(pids)
-	return pids
-}
-
 // waitNoShims polls until no crawlc shim of this daemon is left, and fails if any
 // outlives the budget. Shim exit is asynchronous to the call that triggered it,
 // so the wait is what makes "the shim was reaped" checkable.
@@ -538,15 +495,10 @@ func (d *daemon) cleanup() {
 			}
 		}
 
-		// A shim killed mid-life never unmounts its rootfs, and the leftover
-		// mount would defeat the removal of the test directory. MNT_DETACH
-		// because a mount whose processes have only just been killed can still
-		// be busy.
-		rootfs := filepath.Join(bundle, "rootfs")
-		if err := unix.Unmount(rootfs, unix.MNT_DETACH); err != nil &&
-			!errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOENT) {
-			d.t.Logf("failed to unmount %s: %v", rootfs, err)
-		}
+		// unmountRootfs is a platform-specific function. On Linux it detaches
+		// any rootfs mount a killed shim left behind; on other platforms the
+		// hollow service never mounts anything so it is a no-op.
+		unmountRootfs(d.t, filepath.Join(bundle, "rootfs"))
 	}
 
 	if d.t.Failed() {
