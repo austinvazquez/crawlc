@@ -34,8 +34,10 @@ import (
 func (d *daemon) shimPids() []int {
 	d.t.Helper()
 
+	ctx := d.t.Context()
+
 	// pgrep -f matches the full command line, not just the process name.
-	out, err := exec.Command("pgrep", "-f", shimBinaryName).Output()
+	out, err := exec.CommandContext(ctx, "pgrep", "-f", shimBinaryName).Output()
 	if err != nil {
 		// A non-zero exit from pgrep means no matches — that is not an error.
 		return nil
@@ -49,7 +51,7 @@ func (d *daemon) shimPids() []int {
 		}
 		// Confirm this PID belongs to this test's daemon by checking the
 		// -address argument, which containerd passes to every shim it spawns.
-		argsOut, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
+		argsOut, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
 		if err != nil {
 			continue
 		}
