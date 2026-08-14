@@ -513,6 +513,7 @@ func (d *daemon) waitNoShims(budget time.Duration) {
 // this is reported as a test error. What is reported is the containerd log, and
 // only when the test failed.
 func (d *daemon) cleanup() {
+	d.t.Helper()
 	if d.cmd != nil {
 		d.signalAndWait(syscall.SIGKILL, 10*time.Second)
 	}
@@ -586,9 +587,17 @@ func (d *daemon) dumpLog() {
 		d.t.Logf("failed to read containerd log: %v", err)
 		return
 	}
-	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	trimmed := strings.TrimRight(string(raw), "\n")
+	var lines []string
+	if trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
 	if len(lines) > tail {
 		lines = lines[len(lines)-tail:]
+	}
+	if len(lines) == 0 {
+		d.t.Logf("containerd log is empty")
+		return
 	}
 	d.t.Logf("containerd log (last %d lines):\n%s", len(lines), strings.Join(lines, "\n"))
 }
