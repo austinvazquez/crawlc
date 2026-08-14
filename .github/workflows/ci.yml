@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Validate
+        run: make docker-validate
+
+  binaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      cache-key: ${{ steps.set-key.outputs.cache-key }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set cache key
+        id: set-key
+        run: echo "cache-key=binaries-${{ runner.os }}-${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Restore cached binaries
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: bin/
+          key: ${{ steps.set-key.outputs.cache-key }}
+
+      - name: Set up Buildx
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          REVISION: ${{ github.sha }}
+        run: docker buildx bake binaries
+
+      - name: Save binaries to cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: bin/
+          key: ${{ steps.set-key.outputs.cache-key }}
