@@ -45,10 +45,12 @@ import (
 type hollowTaskService struct {
 	sd shutdown.Service
 
-	mu       sync.Mutex
-	id       string
-	status   tasktypes.Status
-	pid      uint32
+	mu      sync.Mutex
+	id      string
+	deleted bool // Delete has been called and returned
+	status  tasktypes.Status
+	pid     uint32
+
 	exitCode uint32
 	exitedAt time.Time
 	exited   chan struct{}
@@ -100,6 +102,7 @@ func (s *hollowTaskService) Delete(_ context.Context, _ *taskapi.DeleteRequest) 
 	defer s.mu.Unlock()
 
 	s.markExitedLocked()
+	s.deleted = true
 	return &taskapi.DeleteResponse{
 		Pid:        s.pid,
 		ExitStatus: s.exitCode,
@@ -156,7 +159,17 @@ func (s *hollowTaskService) Connect(_ context.Context, _ *taskapi.ConnectRequest
 	}, nil
 }
 
-func (s *hollowTaskService) Shutdown(_ context.Context, _ *taskapi.ShutdownRequest) (*emptypb.Empty, error) {
+func (s *hollowTaskService) Shutdown(_ context.Context, r *taskapi.ShutdownRequest) (*emptypb.Empty, error) {
+	s.mu.Lock()
+	canShutdown := s.id == "" || s.deleted
+	s.mu.Unlock()
+
+	// Mirror the runc task service: if now=false and we still hold a task that
+	// has not been deleted, defer shutdown. containerd removes the bundle and
+	// moves on; the shim stays running until killed externally.
+	if !r.GetNow() && !canShutdown {
+		return &emptypb.Empty{}, nil
+	}
 	s.sd.Shutdown()
 	return &emptypb.Empty{}, nil
 }
