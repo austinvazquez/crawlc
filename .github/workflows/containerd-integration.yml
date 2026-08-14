@@ -1,0 +1,172 @@
+name: containerd-integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache-key:
+        description: cache key for pre-built binaries from CI (leave blank to build fresh)
+        required: false
+      containerd-version:
+        description: containerd release to test against, or "latest"
+        required: false
+        default: latest
+      bounded-shim-load:
+        description: >-
+          Run the tests that need containerd to bound its shim load. They hang
+          rather than fail on a containerd without it, so this is off by default.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # The default when nothing was dispatched. Kept here rather than repeated in
+  # the steps so the workflow_dispatch path tests the same thing regardless of
+  # whether an explicit version was given.
+  DEFAULT_CONTAINERD_VERSION: latest
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      cache-key: ${{ steps.set-key.outputs.cache-key }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Use the key CI stamped for this commit, or derive a fresh one for
+      # manual dispatches where no pre-built binaries exist yet.
+      - name: Set cache key
+        id: set-key
+        run: |
+          key="${{ inputs.cache-key }}"
+          if [ -z "$key" ]; then
+            key="binaries-${{ runner.os }}-${{ github.sha }}"
+          fi
+          echo "cache-key=$key" >> $GITHUB_OUTPUT
+
+      - name: Restore cached binaries
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: bin/
+          key: ${{ steps.set-key.outputs.cache-key }}
+
+      - name: Set up Buildx
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          REVISION: ${{ github.sha }}
+        run: docker buildx bake binaries
+
+      - name: Save binaries to cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: bin/
+          key: ${{ steps.set-key.outputs.cache-key }}
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: binaries
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # binaries job guarantees the cache is populated; fail fast if something
+      # went wrong rather than silently testing against a stale or missing shim.
+      - name: Restore binaries from cache
+        uses: actions/cache/restore@v4
+        with:
+          path: bin/
+          key: ${{ needs.binaries.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Prepare shim
+        run: |
+          shim="$PWD/bin/linux_amd64/containerd-shim-crawlc-v1"
+          # Artifact download does not carry the executable bit.
+          chmod +x "$shim"
+          echo "CRAWLC_TEST_SHIM=$shim" >> "$GITHUB_ENV"
+
+      # Read through the environment rather than interpolated into the script, so
+      # that a dispatch input cannot inject shell.
+      - name: Install containerd
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.containerd-version }}
+        run: |
+          set -euo pipefail
+
+          version="${INPUT_VERSION:-$DEFAULT_CONTAINERD_VERSION}"
+          if [ "$version" = 'latest' ]; then
+            version="$(gh api repos/containerd/containerd/releases/latest --jq .tag_name)"
+          fi
+          echo "Testing against containerd $version"
+
+          tarball="containerd-${version#v}-linux-amd64.tar.gz"
+          url="https://github.com/containerd/containerd/releases/download/${version}/${tarball}"
+
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          curl -fsSL -o "$tarball" "$url"
+          curl -fsSL -o "$tarball.sha256sum" "$url.sha256sum"
+          sha256sum -c "$tarball.sha256sum"
+
+          # The tarball is rooted at bin/, so this lands in /usr/local/bin. The
+          # tests are pointed at the absolute paths regardless: the runner has a
+          # containerd of its own for Docker, and a PATH lookup finding that one
+          # instead would silently test the wrong binary.
+          sudo tar -C /usr/local -xzf "$tarball"
+
+          {
+            echo "CRAWLC_TEST_CONTAINERD=/usr/local/bin/containerd"
+            echo "CRAWLC_TEST_CTR=/usr/local/bin/ctr"
+          } >> "$GITHUB_ENV"
+
+      # runc comes with the runner's Docker installation. Installing one anyway
+      # would mean testing against a runtime the release tarball was not built
+      # with, so this only checks that it is there.
+      - name: Check runc
+        run: |
+          set -euo pipefail
+          command -v runc >/dev/null || {
+            echo "runc not found on PATH" >&2
+            exit 1
+          }
+          runc --version
+
+      - name: Versions
+        run: |
+          "$CRAWLC_TEST_CONTAINERD" --version
+          "$CRAWLC_TEST_SHIM" -v
+
+      # `go test` rather than `make integration`, whose build dependency would
+      # replace the artifact under test with a fresh local build.
+      #
+      # sudo because containerd, runc and the shim all need root, and `sudo -E`
+      # alone would still reset PATH to secure_path and lose the Go toolchain.
+      #
+      # CRAWLC_TEST_BOUNDED_SHIM_LOAD is deliberately left unset unless asked for:
+      # the tests that need it hang rather than fail on a containerd that does not
+      # bound its shim load, and no released containerd does yet.
+      - name: Integration tests
+        env:
+          CRAWLC_TEST_INTEGRATION: "1"
+          CRAWLC_TEST_BOUNDED_SHIM_LOAD: ${{ inputs.bounded-shim-load && '1' || '' }}
+        run: |
+          sudo -E env "PATH=$PATH" \
+            go test -v -count=1 -timeout 20m ./integration/...

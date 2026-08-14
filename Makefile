@@ -52,6 +52,19 @@ uninstall:
 test: ## Run unit tests
 	$(GO) test ./...
 
+# The integration suite starts containerd daemons, runs containers and leaves
+# wedged shims behind, so it is opt-in: the target above compiles it and skips
+# it. Needs root, a containerd and an OCI runtime on PATH, and the shim it is
+# testing, which is why it depends on build.
+#
+# Point it at a particular containerd with CRAWLC_TEST_CONTAINERD and
+# CRAWLC_TEST_CTR; see integration/main_test.go for the rest of the knobs.
+INTEGRATION_FLAGS ?= -v -count=1 -timeout 20m
+
+.PHONY: integration
+integration: build ## Run integration tests against a real containerd (needs root)
+	CRAWLC_TEST_INTEGRATION=1 $(GO) test $(INTEGRATION_FLAGS) ./integration/...
+
 # gofmt walks the tree literally, so it has to be told about vendor; go vet,
 # go test and golangci-lint all skip it on their own because ./... excludes
 # vendored packages in module mode.
