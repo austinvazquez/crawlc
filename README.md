@@ -187,6 +187,40 @@ Clean up afterwards; a wedged shim survives containerd:
 pkill -f containerd-shim-crawlc-v1
 ```
 
+## Tests
+
+`make integration` runs the scenario above and its neighbours for real — a
+containerd of its own per test, a container on crawlc, a restart onto the shim
+left behind — and asserts what containerd did about it. It needs root, a
+containerd, `ctr` and `runc`, so it is opt-in and a plain `go test ./...` skips
+it:
+
+```sh
+make build
+sudo -E env "PATH=$PATH" make integration
+```
+
+`sudo -E` alone is not enough: sudo replaces `PATH` with its `secure_path`
+regardless of `-E`, and the Go toolchain is rarely on it, so the Makefile's
+`go env` calls come back empty and the build fails before a test runs.
+
+Everything it needs from outside is an environment variable:
+
+| Variable | Effect |
+|---|---|
+| `CRAWLC_TEST_INTEGRATION` | Required. Without it every test skips |
+| `CRAWLC_TEST_CONTAINERD`, `CRAWLC_TEST_CTR` | The containerd under test and its CLI. Default to `PATH` |
+| `CRAWLC_TEST_SHIM` | The shim under test. Defaults to `./bin`, then `PATH` |
+| `CRAWLC_TEST_RUNC` | The OCI runtime. Defaults to `PATH` |
+| `CRAWLC_TEST_IMAGE` | Image containers are created from. Defaults to busybox |
+| `CRAWLC_TEST_SNAPSHOTTER` | Set to `native` where the test root is itself on overlayfs, since overlay cannot stack on itself |
+| `CRAWLC_TEST_BOUNDED_SHIM_LOAD` | Asserts the containerd under test bounds shim loading, see below |
+
+Two of the tests reproduce the stalled startup above. On a containerd that does
+not bound its shim load they do not fail, they hang, which is the bug — so they
+run only when `CRAWLC_TEST_BOUNDED_SHIM_LOAD` says the containerd under test has
+the bound. CI leaves it unset against a containerd release and the two skip.
+
 ## License
 
 Apache 2.0. Portions are adapted from containerd's `containerd-shim-runc-fp-v1`
