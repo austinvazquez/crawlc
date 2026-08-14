@@ -1,5 +1,3 @@
-//go:build !windows
-
 /*
    Copyright The crawlc Authors.
 
@@ -30,13 +28,6 @@ import (
 	"github.com/containerd/ttrpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-// selfPid is the pid of this shim process.
-//
-// It is what containerd is told to supervise, and what a liveness probe should
-// find alive, so both the hollow service and the forwarding one report it rather
-// than any pid belonging to a delegate.
-func selfPid() uint32 { return uint32(os.Getpid()) }
 
 // forwardingTaskService passes every task call to a delegate shim.
 //

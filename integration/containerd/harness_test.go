@@ -1,5 +1,3 @@
-//go:build !windows
-
 /*
    Copyright The crawlc Authors.
 
@@ -20,7 +18,6 @@ package containerd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -30,7 +27,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -246,46 +242,6 @@ func (d *daemon) serving() bool {
 	return err == nil
 }
 
-// kill stops containerd the way a crash does, leaving its shims behind. A clean
-// shutdown reaps them, which is the opposite of what most of these tests need.
-func (d *daemon) kill() {
-	d.t.Helper()
-	d.signalAndWait(syscall.SIGKILL, 10*time.Second)
-}
-
-// stop shuts containerd down cleanly.
-func (d *daemon) stop() {
-	d.t.Helper()
-	d.signalAndWait(syscall.SIGTERM, 30*time.Second)
-}
-
-func (d *daemon) signalAndWait(sig syscall.Signal, budget time.Duration) {
-	d.t.Helper()
-
-	if d.cmd == nil {
-		return
-	}
-	if err := d.cmd.Process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		d.t.Errorf("failed to signal containerd with %s: %v", sig, err)
-	}
-
-	select {
-	case <-d.done:
-	case <-time.After(budget):
-		// Escalate rather than hang the test: the process is going away either
-		// way, and a stuck SIGTERM is worth seeing in the output.
-		d.t.Errorf("containerd did not exit within %s of %s, killing", budget, sig)
-		d.cancel()
-		<-d.done
-	}
-
-	d.cancel()
-	if err := d.logFile.Close(); err != nil {
-		d.t.Errorf("failed to close daemon log: %v", err)
-	}
-	d.cmd, d.cancel, d.logFile, d.done = nil, nil, nil, nil
-}
-
 // restart kills containerd and starts a new one on the same root and state, which
 // is what makes the shims left behind into shims a later containerd has to load.
 func (d *daemon) restart(budget time.Duration) time.Duration {
@@ -472,11 +428,11 @@ func (d *daemon) waitNoShims(budget time.Duration) {
 func (d *daemon) cleanup() {
 	d.t.Helper()
 	if d.cmd != nil {
-		d.signalAndWait(syscall.SIGKILL, 10*time.Second)
+		d.kill()
 	}
 
 	for _, pid := range d.shimPids() {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		killPid(pid)
 	}
 
 	// The containers outlive the shims that were supervising them, and runc's
@@ -491,7 +447,7 @@ func (d *daemon) cleanup() {
 		// process is still a `sleep` that would outlive the test run.
 		if raw, err := os.ReadFile(filepath.Join(bundle, "init.pid")); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 1 {
-				_ = syscall.Kill(pid, syscall.SIGKILL)
+				killPid(pid)
 			}
 		}
 

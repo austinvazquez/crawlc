@@ -1,5 +1,3 @@
-//go:build !linux
-
 /*
    Copyright The crawlc Authors.
 
@@ -18,16 +16,11 @@
 
 package task
 
-import (
-	"context"
+import "os"
 
-	taskapi "github.com/containerd/containerd/api/runtime/task/v3"
-	"github.com/containerd/containerd/v2/pkg/shim"
-	"github.com/containerd/containerd/v2/pkg/shutdown"
-)
-
-// newLocalService falls back to the hollow service off Linux, where runc's task
-// service does not build and containerd exports no replacement.
-func newLocalService(_ context.Context, _ shim.Publisher, sd shutdown.Service) (taskapi.TTRPCTaskService, error) {
-	return newHollowTaskService(sd), nil
-}
+// selfPid returns the PID of this shim process.
+//
+// It is what containerd is told to supervise, and what a liveness probe should
+// find alive, so both the hollow service and the forwarding one report it rather
+// than any pid belonging to a delegate.
+func selfPid() uint32 { return uint32(os.Getpid()) }
