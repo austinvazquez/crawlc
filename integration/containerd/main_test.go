@@ -1,5 +1,3 @@
-//go:build !windows
-
 /*
    Copyright The crawlc Authors.
 
@@ -25,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -115,7 +114,9 @@ func TestMain(m *testing.M) {
 func enabled() bool { return os.Getenv(EnvEnable) != "" }
 
 func setup() error {
-	if os.Geteuid() != 0 {
+	// On Windows os.Geteuid() always returns -1; containerd will surface its
+	// own error if the process lacks Administrator rights.
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
 		return fmt.Errorf("must run as root: containerd and the shim both need it")
 	}
 
@@ -179,19 +180,28 @@ func lookShim() (string, error) {
 		if err := checkExecutable(p); err != nil {
 			return "", fmt.Errorf("%s=%q: %w", EnvShim, p, err)
 		}
-		if filepath.Base(p) != shimBinaryName {
+		// Strip .exe before comparing so the check works on Windows without
+		// requiring callers to omit the extension.
+		if strings.TrimSuffix(filepath.Base(p), ".exe") != shimBinaryName {
 			return "", fmt.Errorf("%s=%q must be named %s for containerd to find it", EnvShim, p, shimBinaryName)
 		}
 		return p, nil
 	}
 
-	// ../bin is where `make build` puts it; ../bin/linux_<arch> is where a bake
+	// On Windows executables carry a .exe suffix; exec.LookPath appends it
+	// automatically but explicit paths need it too.
+	exeName := shimBinaryName
+	if runtime.GOOS == "windows" {
+		exeName += ".exe"
+	}
+
+	// ../bin is where `make build` puts it; ../bin/<os>_<arch> is where a bake
 	// build does, since a local export covering several platforms gets a
 	// directory each. Every candidate below already carries the right base name.
 	var candidates []string
 	for _, rel := range []string{
-		filepath.Join("..", "bin", shimBinaryName),
-		filepath.Join("..", "bin", runtime.GOOS+"_"+runtime.GOARCH, shimBinaryName),
+		filepath.Join("..", "bin", exeName),
+		filepath.Join("..", "bin", runtime.GOOS+"_"+runtime.GOARCH, exeName),
 	} {
 		if abs, err := filepath.Abs(rel); err == nil {
 			candidates = append(candidates, abs)
